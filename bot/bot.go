@@ -37,7 +37,7 @@ func NewBot() Bot {
 }
 
 func readBotConfig() map[string]bool {
-	fileContent, err := os.ReadFile("./bot_intents_config.json")
+	fileContent, err := os.ReadFile("./config/bot_intents_config.json")
 	if err != nil {
 		log.Fatal("could not read file 'bot_intents_config.json'")
 	}
