@@ -19,4 +19,6 @@ This is an implementation of a Discord bot using Go that I'm doing as a learning
 
 2. Setup the `.env` file by using `cp .env.example .env` and inserting your discord token
 
-3. Then run `go mod tidy` and `go run .`
+3. Setup the bot intents in `bot_intents_config.json`. Watch out as some of these require extra privileges. Refer to the documentation: [Gateway Intents](https://discord.com/developers/docs/events/gateway#gateway-intents)
+
+4. Then run `go mod tidy` and `go run .`
