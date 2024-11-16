@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/lckrugel/billy-the-bot/bot"
+	"github.com/lckrugel/discord-bot/bot"
 )
 
 /* Conecta o bot ao gateway do Discord e ouve por eventos */

@@ -1,4 +1,4 @@
-module github.com/lckrugel/billy-the-bot
+module github.com/lckrugel/discord-bot
 
 go 1.23.0
 

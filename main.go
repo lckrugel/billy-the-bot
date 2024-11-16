@@ -4,8 +4,8 @@ import (
 	"log"
 
 	"github.com/joho/godotenv"
-	"github.com/lckrugel/billy-the-bot/bot"
-	"github.com/lckrugel/billy-the-bot/gateway"
+	"github.com/lckrugel/discord-bot/bot"
+	"github.com/lckrugel/discord-bot/gateway"
 )
 
 func main() {

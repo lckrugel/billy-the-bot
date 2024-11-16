@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lckrugel/billy-the-bot/bot"
+	"github.com/lckrugel/discord-bot/bot"
 )
 
 type OpCode int
