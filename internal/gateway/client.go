@@ -11,13 +11,27 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/lckrugel/discord-bot/bot"
+	"github.com/lckrugel/discord-bot/internal/config"
 )
 
+type Client struct {
+	conn               *websocket.Conn
+	heartbeat_interval float64
+	config             config.Config
+}
+
+func NewClient(cfg config.Config) *Client {
+	return &Client{
+		conn:               nil,
+		heartbeat_interval: 0,
+		config:             cfg,
+	}
+}
+
 /* Conecta o bot ao gateway do Discord e ouve por eventos */
-func ConnectToGateway(bot bot.Bot) error {
+func (client *Client) Connect() error {
 	// Descobre a URL do websocket
-	wssURL, err := getWebsocketURL(bot.GetSecretKey())
+	wssURL, err := getWebsocketURL(client.config.GetSecretKey())
 	if err != nil {
 		errMsg := fmt.Sprint("error getting websocket url: ", err)
 		return errors.New(errMsg)
@@ -30,6 +44,7 @@ func ConnectToGateway(bot bot.Bot) error {
 		return errors.New(errMsg)
 	}
 	defer conn.Close()
+	client.conn = conn
 
 	// Espera-se que ocorra a troca de HTTP -> WSS
 	if resp.StatusCode != 101 {
@@ -39,7 +54,7 @@ func ConnectToGateway(bot bot.Bot) error {
 
 	gatewayEvents := make(chan GatewayEventPayload, 5)
 
-	go eventListener(conn, gatewayEvents) // Começa a ouvir por eventos
+	go eventListener(client.conn, gatewayEvents) // Começa a ouvir por eventos
 
 	helloPayload := <-gatewayEvents
 	if helloPayload.Operation != Hello {
@@ -52,15 +67,15 @@ func ConnectToGateway(bot bot.Bot) error {
 	}
 
 	// Envia Identify terminando o 'handshake'
-	err = sendIdentify(conn, bot)
+	err = sendIdentify(*client)
 	if err != nil {
 		errMsg := fmt.Sprint("error sending Identify event: ", err)
 		return errors.New(errMsg)
 	}
 
 	// Usando o heartbeat interval recebido no hello inicia a troca de heartbeats
-	heartbeat_interval := payloadData["heartbeat_interval"].(float64)
-	err = handleHeartbeat(conn, heartbeat_interval, gatewayEvents)
+	client.heartbeat_interval = payloadData["heartbeat_interval"].(float64)
+	err = handleHeartbeat(*client, gatewayEvents)
 	if err != nil {
 		return err
 	}
@@ -126,14 +141,14 @@ func eventListener(conn *websocket.Conn, ch chan<- GatewayEventPayload) error {
 }
 
 /* Lida com o envio periódico dos "heartbeats" para manter a conexão */
-func handleHeartbeat(conn *websocket.Conn, interval float64, ch <-chan GatewayEventPayload) error {
+func handleHeartbeat(client Client, ch <-chan GatewayEventPayload) error {
 	// Envia o primeiro heartbeat
 	log.Println("start sending heartbeats...")
 	jitter := rand.Float64() // Intervalo aleatorio antes de começar a enviar heartbeat
-	intervalDuration := time.Duration(time.Millisecond * time.Duration(interval))
+	intervalDuration := time.Duration(time.Millisecond * time.Duration(client.heartbeat_interval))
 	time.Sleep(time.Duration(intervalDuration.Milliseconds() * int64(jitter)))
 	var lastSeq *int = nil
-	lastHeartbeartSentAt, err := sendHeartbeat(conn, lastSeq)
+	lastHeartbeartSentAt, err := sendHeartbeat(client.conn, lastSeq)
 	if err != nil {
 		errMsg := fmt.Sprint("failed to send heartbeat: ", err)
 		return errors.New(errMsg)
@@ -150,7 +165,7 @@ func handleHeartbeat(conn *websocket.Conn, interval float64, ch <-chan GatewayEv
 		case Heartbeat_ACK:
 			log.Print("received heartbeat ack")
 			time.Sleep(intervalDuration)
-			lastHeartbeartSentAt, err = sendHeartbeat(conn, lastSeq)
+			lastHeartbeartSentAt, err = sendHeartbeat(client.conn, lastSeq)
 			if err != nil {
 				errMsg := fmt.Sprint("failed to send heartbeat: ", err)
 				return errors.New(errMsg)
@@ -158,7 +173,7 @@ func handleHeartbeat(conn *websocket.Conn, interval float64, ch <-chan GatewayEv
 
 		case Heartbeat:
 			log.Print("received heartbeat")
-			lastHeartbeartSentAt, err = sendHeartbeat(conn, lastSeq)
+			lastHeartbeartSentAt, err = sendHeartbeat(client.conn, lastSeq)
 			if err != nil {
 				errMsg := fmt.Sprint("failed to send heartbeat: ", err)
 				return errors.New(errMsg)
@@ -180,11 +195,11 @@ func sendHeartbeat(conn *websocket.Conn, seq *int) (time.Time, error) {
 }
 
 /* Envia um evento do tipo Identify */
-func sendIdentify(conn *websocket.Conn, bot bot.Bot) error {
-	identifyPayload, err := CreateIdentifyPayload(bot)
+func sendIdentify(client Client) error {
+	identifyPayload, err := CreateIdentifyPayload(client.config)
 	if err != nil {
 		return err
 	}
-	conn.WriteMessage(websocket.TextMessage, identifyPayload)
+	client.conn.WriteMessage(websocket.TextMessage, identifyPayload)
 	return nil
 }

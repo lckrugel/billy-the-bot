@@ -4,8 +4,8 @@ import (
 	"log"
 
 	"github.com/joho/godotenv"
-	"github.com/lckrugel/discord-bot/bot"
-	"github.com/lckrugel/discord-bot/gateway"
+	"github.com/lckrugel/discord-bot/internal/config"
+	"github.com/lckrugel/discord-bot/internal/gateway"
 )
 
 func main() {
@@ -14,9 +14,10 @@ func main() {
 		log.Fatal("error loading .env file: ", err)
 	}
 
-	bot := bot.NewBot()
+	cfg := config.LoadConfig()
 
-	err = gateway.ConnectToGateway(bot)
+	bot := gateway.NewClient(cfg)
+	bot.Connect()
 	if err != nil {
 		log.Fatal("error connecting to gateway: ", err)
 	}

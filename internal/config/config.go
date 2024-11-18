@@ -1,4 +1,4 @@
-package bot
+package config
 
 import (
 	"encoding/json"
@@ -6,37 +6,37 @@ import (
 	"os"
 )
 
-type Bot struct {
+type Config struct {
 	intents    uint64
 	secret_key string
 }
 
-func (bot Bot) GetSecretKey() string {
-	return bot.secret_key
+func (cfg Config) GetSecretKey() string {
+	return cfg.secret_key
 }
 
-func (bot Bot) GetIntents() uint64 {
-	return bot.intents
+func (cfg Config) GetIntents() uint64 {
+	return cfg.intents
 }
 
-func NewBot() Bot {
+func LoadConfig() Config {
 	discord_api_key, isSet := os.LookupEnv("DISCORD_API_KEY")
 	if !isSet {
 		log.Fatal("missing environment variable: 'DISCORD_API_KEY'")
 	}
 
-	intentsMap := readBotConfig()
-	intents := calculateBotIntents(intentsMap)
+	intentsMap := readConfigFile()
+	intents := calculateIntents(intentsMap)
 
-	bot := Bot{
+	cfg := Config{
 		secret_key: discord_api_key,
 		intents:    intents,
 	}
 
-	return bot
+	return cfg
 }
 
-func readBotConfig() map[string]bool {
+func readConfigFile() map[string]bool {
 	fileContent, err := os.ReadFile("./config/bot_intents_config.json")
 	if err != nil {
 		log.Fatal("could not read file 'bot_intents_config.json'")
@@ -51,7 +51,7 @@ func readBotConfig() map[string]bool {
 	return config
 }
 
-func calculateBotIntents(intentsMap map[string]bool) uint64 {
+func calculateIntents(intentsMap map[string]bool) uint64 {
 	// Todas as intents e seus valores
 	intentValues := map[string]uint64{
 		"guilds":                        1 << 0,
