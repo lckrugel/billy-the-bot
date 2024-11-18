@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/lckrugel/discord-bot/internal/config"
 )
 
 type OpCode int
@@ -86,15 +84,15 @@ func CreateHeartbeatPayload(sequence *int) ([]byte, error) {
 	return heartbeatPayloadJSON, nil
 }
 
-func CreateIdentifyPayload(cfg config.Config) ([]byte, error) {
+func CreateIdentifyPayload(token string, intents uint64) ([]byte, error) {
 	identifyData := map[string]any{
-		"token": cfg.GetSecretKey(),
+		"token": token,
 		"properties": map[string]string{
 			"os":      "windows",
 			"browser": "billy",
 			"device":  "billy",
 		},
-		"intents": cfg.GetIntents(),
+		"intents": intents,
 	}
 
 	identifyPayload := GatewayEventPayload{

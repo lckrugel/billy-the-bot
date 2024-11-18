@@ -17,21 +17,23 @@ import (
 type Client struct {
 	conn               *websocket.Conn
 	heartbeat_interval float64
-	config             config.Config
+	token              string
+	intents            uint64
 }
 
 func NewClient(cfg config.Config) *Client {
 	return &Client{
 		conn:               nil,
 		heartbeat_interval: 0,
-		config:             cfg,
+		token:              cfg.GetSecretKey(),
+		intents:            cfg.GetIntents(),
 	}
 }
 
 /* Conecta o bot ao gateway do Discord e ouve por eventos */
 func (client *Client) Connect() error {
 	// Descobre a URL do websocket
-	wssURL, err := getWebsocketURL(client.config.GetSecretKey())
+	wssURL, err := getWebsocketURL(client.token)
 	if err != nil {
 		errMsg := fmt.Sprint("error getting websocket url: ", err)
 		return errors.New(errMsg)
@@ -196,7 +198,7 @@ func sendHeartbeat(conn *websocket.Conn, seq *int) (time.Time, error) {
 
 /* Envia um evento do tipo Identify */
 func sendIdentify(client Client) error {
-	identifyPayload, err := CreateIdentifyPayload(client.config)
+	identifyPayload, err := CreateIdentifyPayload(client.token, client.intents)
 	if err != nil {
 		return err
 	}
