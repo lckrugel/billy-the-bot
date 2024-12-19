@@ -15,25 +15,31 @@ import (
 )
 
 type Client struct {
-	conn               *websocket.Conn
-	heartbeat_interval float64
+	conn             *websocket.Conn
+	last_sequence    *int
+	connectionEvents chan GatewayEventPayload
+	// dispatchEvents     chan GatewayEventPayload
+	stopSignal         chan struct{}
 	token              string
 	intents            uint64
+	heartbeat_interval int
+	session_id         string
+	reconnect_url      string
 }
 
-func NewClient(cfg config.Config) *Client {
-	return &Client{
-		conn:               nil,
-		heartbeat_interval: 0,
-		token:              cfg.GetSecretKey(),
-		intents:            cfg.GetIntents(),
-	}
+func (client *Client) SetReconnectParams(session_id string, url string) {
+	client.session_id = session_id
+	client.reconnect_url = url
+}
+
+func (client *Client) Events() <-chan GatewayEventPayload {
+	return client.connectionEvents
 }
 
 /* Conecta o bot ao gateway do Discord e ouve por eventos */
-func (client *Client) Connect() error {
+func (c *Client) Connect() error {
 	// Descobre a URL do websocket
-	wssURL, err := getWebsocketURL(client.token)
+	wssURL, err := getWebsocketURL(c.token)
 	if err != nil {
 		errMsg := fmt.Sprint("error getting websocket url: ", err)
 		return errors.New(errMsg)
@@ -45,8 +51,7 @@ func (client *Client) Connect() error {
 		errMsg := fmt.Sprint("error establishing connection to gateway: ", err)
 		return errors.New(errMsg)
 	}
-	defer conn.Close()
-	client.conn = conn
+	c.conn = conn
 
 	// Espera-se que ocorra a troca de HTTP -> WSS
 	if resp.StatusCode != 101 {
@@ -54,35 +59,114 @@ func (client *Client) Connect() error {
 		return errors.New(errMsg)
 	}
 
-	gatewayEvents := make(chan GatewayEventPayload, 5)
+	// Cria um canal para enviar um sinal e parar a execução das goroutines
+	c.stopSignal = make(chan struct{}, 2)
 
-	go eventListener(client.conn, gatewayEvents) // Começa a ouvir por eventos
+	c.connectionEvents = make(chan GatewayEventPayload, 1)
 
-	helloPayload := <-gatewayEvents
+	go listener(c) // Começa a ouvir por eventos
+
+	helloPayload := <-c.connectionEvents
 	if helloPayload.Operation != Hello {
 		return errors.New("didn't receive Hello event")
 	}
-	payloadData, err := helloPayload.GetPayloadData()
-	if err != nil {
-		errMsg := fmt.Sprint("error getting Hello payload: ", err)
-		return errors.New(errMsg)
-	}
 
 	// Envia Identify terminando o 'handshake'
-	err = sendIdentify(*client)
+	err = SendIdentify(*c)
 	if err != nil {
 		errMsg := fmt.Sprint("error sending Identify event: ", err)
 		return errors.New(errMsg)
 	}
 
-	// Usando o heartbeat interval recebido no hello inicia a troca de heartbeats
-	client.heartbeat_interval = payloadData["heartbeat_interval"].(float64)
-	err = handleHeartbeat(*client, gatewayEvents)
-	if err != nil {
-		return err
+	// Recebe o Ready com informações sobre como retomar a conexão
+	readyPayload := <-c.connectionEvents
+	if readyPayload.Operation != Dispatch || *readyPayload.Type != "READY" {
+		return errors.New("didn't receive Ready event")
 	}
+	c.reconnect_url, c.session_id, err = getReconnectionData(readyPayload)
+	if err != nil {
+		errMsg := fmt.Sprint("error while geting reconnection data: ", err)
+		return errors.New(errMsg)
+	}
+	log.Printf("Rec_URL: %v | Session_id: %v", c.reconnect_url, c.session_id)
+
+	// Usando o heartbeat interval recebido no hello inicia a troca de heartbeats
+	c.heartbeat_interval = int(helloPayload.Data["heartbeat_interval"].(float64))
+
+	go handleHeartbeat(c)
 
 	return nil
+}
+
+func (c *Client) Reconnect() {
+	log.Println("Attempting to reconnect...")
+
+	// Para a execução das goroutines e fecha a conexão
+	c.sendStopSignal()
+	if c.conn != nil {
+		c.conn.Close()
+		close(c.connectionEvents)
+		c.conn = nil
+	}
+
+	// Reinicia a conexão com o gateway usando a url fornecida
+	conn, resp, err := websocket.DefaultDialer.Dial(c.reconnect_url, nil)
+	if err != nil {
+		log.Print("error restablishing connection to gateway: ", err)
+		log.Print("restarting connection...")
+		c.Connect()
+		return
+	}
+	c.conn = conn
+
+	// Espera-se que ocorra a troca de HTTP -> WSS
+	if resp.StatusCode != 101 {
+		log.Print("failed to switch protocols with status: ", resp.StatusCode)
+		log.Print("restarting connection...")
+		c.Connect()
+		return
+	}
+
+	// Recria o canal para os sinais de parada
+	c.stopSignal = make(chan struct{}, 2)
+
+	go listener(c) // Recomeça a ouvir os eventos
+	SendResume(*c)
+
+	// Checa se foi resumida com sucesso a conexão
+	resumedPayload := <-c.connectionEvents
+	if *resumedPayload.Type != "Resumed" {
+		log.Print("failed to resume connection")
+		log.Print("restarting connection...")
+		c.Connect()
+		return
+	}
+
+	go handleHeartbeat(c)
+}
+
+func (c *Client) Disconnect() {
+	log.Println("Disconnecting...")
+
+	c.sendStopSignal()
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c = nil
+}
+
+func (client *Client) sendStopSignal() {
+	if client.stopSignal != nil {
+		close(client.stopSignal)
+		client.stopSignal = nil
+	}
+}
+
+func NewClient(cfg config.Config) *Client {
+	return &Client{
+		token:   cfg.GetSecretKey(),
+		intents: cfg.GetIntents(),
+	}
 }
 
 /* Recebe a URL de websockets que deve ser usada na conexão */
@@ -125,83 +209,52 @@ func getWebsocketURL(api_key string) (string, error) {
 	return url, nil
 }
 
-/* Escuta por eventos na conexão e os envia no canal */
-func eventListener(conn *websocket.Conn, ch chan<- GatewayEventPayload) error {
-	for {
-		_, msg, err := conn.ReadMessage()
-		if err != nil {
-			return err
-		}
-
-		responsePayload, err := unmarshalPayload(msg)
-		if err != nil {
-			return err
-		}
-
-		ch <- responsePayload
-	}
-}
-
 /* Lida com o envio periódico dos "heartbeats" para manter a conexão */
-func handleHeartbeat(client Client, ch <-chan GatewayEventPayload) error {
+func handleHeartbeat(client *Client) error {
 	// Envia o primeiro heartbeat
 	log.Println("start sending heartbeats...")
 	jitter := rand.Float64() // Intervalo aleatorio antes de começar a enviar heartbeat
 	intervalDuration := time.Duration(time.Millisecond * time.Duration(client.heartbeat_interval))
+
 	time.Sleep(time.Duration(intervalDuration.Milliseconds() * int64(jitter)))
-	var lastSeq *int = nil
-	lastHeartbeartSentAt, err := sendHeartbeat(client.conn, lastSeq)
+	client.last_sequence = nil
+	lastHeartbeartSentAt, err := SendHeartbeat(*client)
 	if err != nil {
 		errMsg := fmt.Sprint("failed to send heartbeat: ", err)
 		return errors.New(errMsg)
 	}
 
 	// Loop de envio de heartbeats
-	for lastEvent := range ch {
-		if time.Since(lastHeartbeartSentAt) > intervalDuration {
-			return errors.New("didn't receive heartbeat ack")
-		}
-		lastSeq = lastEvent.Sequence
+	for lastEvent := range client.connectionEvents {
+		select {
+		case <-client.stopSignal:
+			return nil
 
-		switch lastEvent.Operation {
-		case Heartbeat_ACK:
-			log.Print("received heartbeat ack")
-			time.Sleep(intervalDuration)
-			lastHeartbeartSentAt, err = sendHeartbeat(client.conn, lastSeq)
-			if err != nil {
-				errMsg := fmt.Sprint("failed to send heartbeat: ", err)
-				return errors.New(errMsg)
+		default:
+			if time.Since(lastHeartbeartSentAt) > intervalDuration {
+				client.Reconnect()
 			}
+			client.last_sequence = lastEvent.Sequence
 
-		case Heartbeat:
-			log.Print("received heartbeat")
-			lastHeartbeartSentAt, err = sendHeartbeat(client.conn, lastSeq)
-			if err != nil {
-				errMsg := fmt.Sprint("failed to send heartbeat: ", err)
-				return errors.New(errMsg)
+			switch lastEvent.Operation {
+			case Heartbeat_ACK:
+				log.Print("received heartbeat ack")
+				time.Sleep(intervalDuration)
+				lastHeartbeartSentAt, err = SendHeartbeat(*client)
+				if err != nil {
+					errMsg := fmt.Sprint("failed to send heartbeat: ", err)
+					return errors.New(errMsg)
+				}
+
+			case Heartbeat:
+				log.Print("received heartbeat")
+				lastHeartbeartSentAt, err = SendHeartbeat(*client)
+				if err != nil {
+					errMsg := fmt.Sprint("failed to send heartbeat: ", err)
+					return errors.New(errMsg)
+				}
 			}
 		}
 	}
-	return nil
-}
-
-/* Envia um evento do tipo Heartbeat */
-func sendHeartbeat(conn *websocket.Conn, seq *int) (time.Time, error) {
-	heartbeatPayload, err := CreateHeartbeatPayload(seq)
-	if err != nil {
-		return time.Now(), err
-	}
-	log.Println("sending heartbeat")
-	conn.WriteMessage(websocket.TextMessage, heartbeatPayload)
-	return time.Now(), nil
-}
-
-/* Envia um evento do tipo Identify */
-func sendIdentify(client Client) error {
-	identifyPayload, err := CreateIdentifyPayload(client.token, client.intents)
-	if err != nil {
-		return err
-	}
-	client.conn.WriteMessage(websocket.TextMessage, identifyPayload)
 	return nil
 }

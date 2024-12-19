@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type OpCode int
@@ -43,10 +47,10 @@ func (op OpCode) String() string {
 }
 
 type GatewayEventPayload struct {
-	Operation OpCode  `json:"op"`
-	Data      any     `json:"d"`
-	Sequence  *int    `json:"s"`
-	Type      *string `json:"t"`
+	Operation OpCode                 `json:"op"`
+	Data      map[string]interface{} `json:"d"`
+	Sequence  *int                   `json:"s"`
+	Type      *string                `json:"t"`
 }
 
 func (eventPayload GatewayEventPayload) String() string {
@@ -57,25 +61,17 @@ func (eventPayload GatewayEventPayload) String() string {
 		eventPayload.Type)
 }
 
-func (eventPayload GatewayEventPayload) GetPayloadData() (map[string]any, error) {
-	payloadData, ok := eventPayload.Data.(map[string]any)
-	if !ok {
-		return nil, errors.New("failed to convert payload data to map")
-	}
-	return payloadData, nil
-}
-
 func unmarshalPayload(msg []byte) (GatewayEventPayload, error) {
 	var payload GatewayEventPayload
 	err := json.Unmarshal(msg, &payload)
 	return payload, err
 }
 
-func CreateHeartbeatPayload(sequence *int) ([]byte, error) {
-	seq := any(sequence)
+func createHeartbeatPayload(sequence *int) ([]byte, error) {
+	seq := map[string]interface{}{"seq": sequence}
 	heartbeatPayload := GatewayEventPayload{
 		Operation: Heartbeat,
-		Data:      &seq,
+		Data:      seq,
 	}
 	heartbeatPayloadJSON, err := json.Marshal(heartbeatPayload)
 	if err != nil {
@@ -84,7 +80,7 @@ func CreateHeartbeatPayload(sequence *int) ([]byte, error) {
 	return heartbeatPayloadJSON, nil
 }
 
-func CreateIdentifyPayload(token string, intents uint64) ([]byte, error) {
+func createIdentifyPayload(token string, intents uint64) ([]byte, error) {
 	identifyData := map[string]any{
 		"token": token,
 		"properties": map[string]string{
@@ -104,4 +100,70 @@ func CreateIdentifyPayload(token string, intents uint64) ([]byte, error) {
 		return nil, err
 	}
 	return idenfityPayloadJSON, nil
+}
+
+func createResumePayload(client Client) ([]byte, error) {
+	resumeData := map[string]any{
+		"token":      client.token,
+		"session_id": client.session_id,
+		"seq":        client.heartbeat_interval,
+	}
+
+	resumePayload := GatewayEventPayload{
+		Operation: Resume,
+		Data:      resumeData,
+	}
+	resumePayloadJSON, err := json.Marshal(resumePayload)
+	if err != nil {
+		return nil, err
+	}
+	return resumePayloadJSON, nil
+}
+
+/* Envia um evento do tipo Heartbeat */
+func SendHeartbeat(client Client) (time.Time, error) {
+	heartbeatPayload, err := createHeartbeatPayload(client.last_sequence)
+	if err != nil {
+		return time.Now(), err
+	}
+	log.Println("sending heartbeat")
+	client.conn.WriteMessage(websocket.TextMessage, heartbeatPayload)
+	return time.Now(), nil
+}
+
+/* Envia um evento do tipo Identify */
+func SendIdentify(client Client) error {
+	identifyPayload, err := createIdentifyPayload(client.token, client.intents)
+	if err != nil {
+		return err
+	}
+	client.conn.WriteMessage(websocket.TextMessage, identifyPayload)
+	return nil
+}
+
+func SendResume(client Client) error {
+	resumePayload, err := createResumePayload(client)
+	if err != nil {
+		return nil
+	}
+	client.conn.WriteMessage(websocket.TextMessage, resumePayload)
+	return nil
+}
+
+func getReconnectionData(e GatewayEventPayload) (reconnect_url, session_id string, err error) {
+	if *e.Type != "READY" {
+		return "", "", errors.New("event is not of type 'READY'")
+	}
+
+	reconnect_url, ok := e.Data["resume_gateway_url"].(string)
+	if !ok {
+		return "", "", errors.New("could not find 'resume_gateway_url'")
+	}
+
+	session_id, ok = e.Data["session_id"].(string)
+	if !ok {
+		return "", "", errors.New("could not find 'session_id'")
+	}
+
+	return reconnect_url, session_id, nil
 }
