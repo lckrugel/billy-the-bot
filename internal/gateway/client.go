@@ -53,6 +53,12 @@ func (c *Client) Connect() error {
 	}
 	c.conn = conn
 
+	conn.SetCloseHandler(func(code int, text string) error {
+		log.Printf("webSocket closed with code: %d, reason: %s", code, text)
+		handleCloseCode(code, *c)
+		return nil
+	})
+
 	// Espera-se que ocorra a troca de HTTP -> WSS
 	if resp.StatusCode != 101 {
 		errMsg := fmt.Sprint("failed to switch protocols with status: ", resp.StatusCode)
@@ -118,6 +124,12 @@ func (c *Client) Reconnect() {
 		return
 	}
 	c.conn = conn
+
+	conn.SetCloseHandler(func(code int, text string) error {
+		log.Printf("webSocket closed with code: %d, reason: %s", code, text)
+		handleCloseCode(code, *c)
+		return nil
+	})
 
 	// Espera-se que ocorra a troca de HTTP -> WSS
 	if resp.StatusCode != 101 {
@@ -257,4 +269,12 @@ func handleHeartbeat(client *Client) error {
 		}
 	}
 	return nil
+}
+
+func handleCloseCode(code int, c Client) {
+	if code >= 4000 && code < 4010 {
+		c.Reconnect()
+	} else {
+		c.Disconnect()
+	}
 }
