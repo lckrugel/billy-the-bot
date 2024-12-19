@@ -272,7 +272,7 @@ func handleHeartbeat(client *Client) error {
 }
 
 func handleCloseCode(code int, c Client) {
-	if code >= 4000 && code < 4010 {
+	if code == 1001 || code >= 4000 && code < 4010 {
 		c.Reconnect()
 	} else {
 		c.Disconnect()
