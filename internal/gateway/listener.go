@@ -1,6 +1,10 @@
 package gateway
 
-import "log"
+import (
+	"log"
+
+	"github.com/gorilla/websocket"
+)
 
 /* Escuta por eventos na conexão e os envia nos canais */
 func listener(client *Client) {
@@ -11,7 +15,12 @@ func listener(client *Client) {
 		default:
 			_, msg, err := client.conn.ReadMessage()
 			if err != nil {
-				log.Fatalf("error reading gateway message: %v", err)
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					log.Println("Listener: ws connection closed: ", closeErr)
+					return
+				} else {
+					log.Fatalf("error reading gateway message: %v", err)
+				}
 			}
 
 			msgPayload, err := unmarshalPayload(msg)
