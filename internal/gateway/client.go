@@ -93,7 +93,6 @@ func (c *Client) Connect() error {
 		errMsg := fmt.Sprint("error while geting reconnection data: ", err)
 		return errors.New(errMsg)
 	}
-	log.Printf("Rec_URL: %v | Session_id: %v", c.reconnect_url, c.session_id)
 
 	// Usando o heartbeat interval recebido no hello inicia a troca de heartbeats
 	c.heartbeat_interval = int(helloPayload.Data["heartbeat_interval"].(float64))
