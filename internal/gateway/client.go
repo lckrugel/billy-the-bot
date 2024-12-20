@@ -54,8 +54,7 @@ func (c *Client) Connect() error {
 	c.conn = conn
 
 	conn.SetCloseHandler(func(code int, text string) error {
-		log.Printf("webSocket closed with code: %d, reason: %s", code, text)
-		handleCloseCode(code, *c)
+		handleCloseCode(code, text, *c)
 		return nil
 	})
 
@@ -108,12 +107,7 @@ func (c *Client) Reconnect() {
 	log.Println("Attempting to reconnect...")
 
 	// Para a execução das goroutines e fecha a conexão
-	c.sendStopSignal()
-	if c.conn != nil {
-		c.conn.Close()
-		close(c.connectionEvents)
-		c.conn = nil
-	}
+	c.Disconnect()
 
 	// Reinicia a conexão com o gateway usando a url fornecida
 	conn, resp, err := websocket.DefaultDialer.Dial(c.reconnect_url, nil)
@@ -126,8 +120,7 @@ func (c *Client) Reconnect() {
 	c.conn = conn
 
 	conn.SetCloseHandler(func(code int, text string) error {
-		log.Printf("webSocket closed with code: %d, reason: %s", code, text)
-		handleCloseCode(code, *c)
+		handleCloseCode(code, text, *c)
 		return nil
 	})
 
@@ -147,7 +140,7 @@ func (c *Client) Reconnect() {
 
 	// Checa se foi resumida com sucesso a conexão
 	resumedPayload := <-c.connectionEvents
-	if *resumedPayload.Type != "Resumed" {
+	if *resumedPayload.Type != "RESUMED" {
 		log.Print("failed to resume connection")
 		log.Print("restarting connection...")
 		c.Connect()
@@ -163,8 +156,9 @@ func (c *Client) Disconnect() {
 	c.sendStopSignal()
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
-	c = nil
+	close(c.connectionEvents)
 }
 
 func (client *Client) sendStopSignal() {
@@ -224,7 +218,7 @@ func getWebsocketURL(api_key string) (string, error) {
 /* Lida com o envio periódico dos "heartbeats" para manter a conexão */
 func handleHeartbeat(client *Client) error {
 	// Envia o primeiro heartbeat
-	log.Println("start sending heartbeats...")
+	log.Println("[heartbeat] start sending heartbeats...")
 	jitter := rand.Float64() // Intervalo aleatorio antes de começar a enviar heartbeat
 	intervalDuration := time.Duration(time.Millisecond * time.Duration(client.heartbeat_interval))
 
@@ -232,7 +226,7 @@ func handleHeartbeat(client *Client) error {
 	client.last_sequence = nil
 	lastHeartbeartSentAt, err := SendHeartbeat(*client)
 	if err != nil {
-		errMsg := fmt.Sprint("failed to send heartbeat: ", err)
+		errMsg := fmt.Sprint("[heartbeat] failed to send heartbeat: ", err)
 		return errors.New(errMsg)
 	}
 
@@ -250,19 +244,19 @@ func handleHeartbeat(client *Client) error {
 
 			switch lastEvent.Operation {
 			case Heartbeat_ACK:
-				log.Print("received heartbeat ack")
+				log.Print("[heartbeat] received heartbeat ack")
 				time.Sleep(intervalDuration)
 				lastHeartbeartSentAt, err = SendHeartbeat(*client)
 				if err != nil {
-					errMsg := fmt.Sprint("failed to send heartbeat: ", err)
+					errMsg := fmt.Sprint("[heartbeat] failed to send heartbeat: ", err)
 					return errors.New(errMsg)
 				}
 
 			case Heartbeat:
-				log.Print("received heartbeat")
+				log.Print("[heartbeat] received heartbeat")
 				lastHeartbeartSentAt, err = SendHeartbeat(*client)
 				if err != nil {
-					errMsg := fmt.Sprint("failed to send heartbeat: ", err)
+					errMsg := fmt.Sprint("[heartbeat] failed to send heartbeat: ", err)
 					return errors.New(errMsg)
 				}
 			}
@@ -271,10 +265,12 @@ func handleHeartbeat(client *Client) error {
 	return nil
 }
 
-func handleCloseCode(code int, c Client) {
-	if code == 1001 || code >= 4000 && code < 4010 {
-		c.Reconnect()
+func handleCloseCode(code int, text string, c Client) {
+	log.Printf("webSocket closed with code: %d, reason: %s", code, text)
+	// Se for possível, tenta a reconexão, se não cria uma nova conexão
+	if code > 4010 {
+		c.Connect()
 	} else {
-		c.Disconnect()
+		c.Reconnect()
 	}
 }
