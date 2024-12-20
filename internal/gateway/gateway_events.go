@@ -126,7 +126,7 @@ func SendHeartbeat(client Client) (time.Time, error) {
 	if err != nil {
 		return time.Now(), err
 	}
-	log.Println("sending heartbeat")
+	log.Println("[heartbeat] sending heartbeat")
 	client.conn.WriteMessage(websocket.TextMessage, heartbeatPayload)
 	return time.Now(), nil
 }
